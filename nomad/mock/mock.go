@@ -217,6 +217,7 @@ func Job() *structs.Job {
 				Migrate: structs.DefaultMigrateStrategy(),
 				Networks: []*structs.NetworkResource{
 					{
+						Mode: "host",
 						DynamicPorts: []structs.Port{
 							{Label: "http"},
 							{Label: "admin"},
