@@ -1290,7 +1290,7 @@ func TestTaskGroupNetwork_Validate(t *testing.T) {
 func TestTask_Validate(t *testing.T) {
 	task := &Task{}
 	ephemeralDisk := DefaultEphemeralDisk()
-	err := task.Validate(ephemeralDisk, JobTypeBatch, nil)
+	err := task.Validate(ephemeralDisk, JobTypeBatch, nil, nil)
 	mErr := err.(*multierror.Error)
 	if !strings.Contains(mErr.Errors[0].Error(), "task name") {
 		t.Fatalf("err: %s", err)
@@ -1303,7 +1303,7 @@ func TestTask_Validate(t *testing.T) {
 	}
 
 	task = &Task{Name: "web/foo"}
-	err = task.Validate(ephemeralDisk, JobTypeBatch, nil)
+	err = task.Validate(ephemeralDisk, JobTypeBatch, nil, nil)
 	mErr = err.(*multierror.Error)
 	if !strings.Contains(mErr.Errors[0].Error(), "slashes") {
 		t.Fatalf("err: %s", err)
@@ -1319,7 +1319,7 @@ func TestTask_Validate(t *testing.T) {
 		LogConfig: DefaultLogConfig(),
 	}
 	ephemeralDisk.SizeMB = 200
-	err = task.Validate(ephemeralDisk, JobTypeBatch, nil)
+	err = task.Validate(ephemeralDisk, JobTypeBatch, nil, nil)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -1333,7 +1333,7 @@ func TestTask_Validate(t *testing.T) {
 			LTarget: "${meta.rack}",
 		})
 
-	err = task.Validate(ephemeralDisk, JobTypeBatch, nil)
+	err = task.Validate(ephemeralDisk, JobTypeBatch, nil, nil)
 	mErr = err.(*multierror.Error)
 	if !strings.Contains(mErr.Errors[0].Error(), "task level: distinct_hosts") {
 		t.Fatalf("err: %s", err)
@@ -1399,7 +1399,7 @@ func TestTask_Validate_Services(t *testing.T) {
 		Services:  []*Service{s3, s4},
 		LogConfig: DefaultLogConfig(),
 	}
-	task1.Resources.Networks = []*NetworkResource{
+	tgNetworks := []*NetworkResource{
 		{
 			MBits: 10,
 			DynamicPorts: []Port{
@@ -1415,7 +1415,7 @@ func TestTask_Validate_Services(t *testing.T) {
 		},
 	}
 
-	err := task.Validate(ephemeralDisk, JobTypeService, nil)
+	err := task.Validate(ephemeralDisk, JobTypeService, nil, tgNetworks)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -1436,7 +1436,7 @@ func TestTask_Validate_Services(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	if err = task1.Validate(ephemeralDisk, JobTypeService, nil); err != nil {
+	if err = task1.Validate(ephemeralDisk, JobTypeService, nil, tgNetworks); err != nil {
 		t.Fatalf("err : %v", err)
 	}
 }
@@ -1451,18 +1451,18 @@ func TestTask_Validate_Service_AddressMode_Ok(t *testing.T) {
 			Services:  []*Service{s},
 			LogConfig: DefaultLogConfig(),
 		}
-		task.Resources.Networks = []*NetworkResource{
-			{
-				MBits: 10,
-				DynamicPorts: []Port{
-					{
-						Label: "http",
-						Value: 80,
-					},
+
+		return task
+	}
+	tgNetworks := []*NetworkResource{
+		{
+			DynamicPorts: []Port{
+				{
+					Label: "http",
+					Value: 80,
 				},
 			},
-		}
-		return task
+		},
 	}
 
 	cases := []*Service{
@@ -1495,7 +1495,7 @@ func TestTask_Validate_Service_AddressMode_Ok(t *testing.T) {
 	for _, service := range cases {
 		task := getTask(service)
 		t.Run(service.Name, func(t *testing.T) {
-			if err := task.Validate(ephemeralDisk, JobTypeService, nil); err != nil {
+			if err := task.Validate(ephemeralDisk, JobTypeService, nil, tgNetworks); err != nil {
 				t.Fatalf("unexpected err: %v", err)
 			}
 		})
@@ -1505,25 +1505,23 @@ func TestTask_Validate_Service_AddressMode_Ok(t *testing.T) {
 func TestTask_Validate_Service_AddressMode_Bad(t *testing.T) {
 	ephemeralDisk := DefaultEphemeralDisk()
 	getTask := func(s *Service) *Task {
-		task := &Task{
+		return &Task{
 			Name:      "web",
 			Driver:    "docker",
 			Resources: DefaultResources(),
 			Services:  []*Service{s},
 			LogConfig: DefaultLogConfig(),
 		}
-		task.Resources.Networks = []*NetworkResource{
-			{
-				MBits: 10,
-				DynamicPorts: []Port{
-					{
-						Label: "http",
-						Value: 80,
-					},
+	}
+	tgNetworks := []*NetworkResource{
+		{
+			DynamicPorts: []Port{
+				{
+					Label: "http",
+					Value: 80,
 				},
 			},
-		}
-		return task
+		},
 	}
 
 	cases := []*Service{
@@ -1548,7 +1546,7 @@ func TestTask_Validate_Service_AddressMode_Bad(t *testing.T) {
 	for _, service := range cases {
 		task := getTask(service)
 		t.Run(service.Name, func(t *testing.T) {
-			err := task.Validate(ephemeralDisk, JobTypeService, nil)
+			err := task.Validate(ephemeralDisk, JobTypeService, nil, tgNetworks)
 			if err == nil {
 				t.Fatalf("expected an error")
 			}
@@ -1665,9 +1663,10 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 // TestTask_Validate_Service_Check_AddressMode asserts that checks do not
 // inherit address mode but do inherit ports.
 func TestTask_Validate_Service_Check_AddressMode(t *testing.T) {
-	getTask := func(s *Service) *Task {
+	getTask := func(s *Service) (*Task, *TaskGroup) {
 		return &Task{
-			Resources: &Resources{
+				Services: []*Service{s},
+			}, &TaskGroup{
 				Networks: []*NetworkResource{
 					{
 						DynamicPorts: []Port{
@@ -1678,9 +1677,7 @@ func TestTask_Validate_Service_Check_AddressMode(t *testing.T) {
 						},
 					},
 				},
-			},
-			Services: []*Service{s},
-		}
+			}
 	}
 
 	cases := []struct {
@@ -1819,9 +1816,9 @@ func TestTask_Validate_Service_Check_AddressMode(t *testing.T) {
 
 	for _, tc := range cases {
 		tc := tc
-		task := getTask(tc.Service)
+		task, tg := getTask(tc.Service)
 		t.Run(tc.Service.Name, func(t *testing.T) {
-			err := validateServices(task)
+			err := validateServices(task, tg.Networks)
 			if err == nil && tc.ErrContains == "" {
 				// Ok!
 				return
@@ -1977,7 +1974,7 @@ func TestTask_Validate_ConnectProxyKind(t *testing.T) {
 			task.Services = []*Service{tc.Service}
 		}
 		t.Run(tc.Desc, func(t *testing.T) {
-			err := task.Validate(ephemeralDisk, "service", tc.TgService)
+			err := task.Validate(ephemeralDisk, "service", tc.TgService, nil)
 			if err == nil && tc.ErrContains == "" {
 				// Ok!
 				return
@@ -1996,7 +1993,7 @@ func TestTask_Validate_LogConfig(t *testing.T) {
 		SizeMB: 1,
 	}
 
-	err := task.Validate(ephemeralDisk, JobTypeService, nil)
+	err := task.Validate(ephemeralDisk, JobTypeService, nil, nil)
 	mErr := err.(*multierror.Error)
 	if !strings.Contains(mErr.Errors[3].Error(), "log storage") {
 		t.Fatalf("err: %s", err)
@@ -2037,7 +2034,7 @@ func TestTask_Validate_CSIPluginConfig(t *testing.T) {
 				SizeMB: 1,
 			}
 
-			err := task.Validate(ephemeralDisk, JobTypeService, nil)
+			err := task.Validate(ephemeralDisk, JobTypeService, nil, nil)
 			mErr := err.(*multierror.Error)
 			if tt.expectedErr != "" {
 				if !strings.Contains(mErr.Errors[4].Error(), tt.expectedErr) {
@@ -2062,7 +2059,7 @@ func TestTask_Validate_Template(t *testing.T) {
 		SizeMB: 1,
 	}
 
-	err := task.Validate(ephemeralDisk, JobTypeService, nil)
+	err := task.Validate(ephemeralDisk, JobTypeService, nil, nil)
 	if !strings.Contains(err.Error(), "Template 1 validation failed") {
 		t.Fatalf("err: %s", err)
 	}
@@ -2075,7 +2072,7 @@ func TestTask_Validate_Template(t *testing.T) {
 	}
 
 	task.Templates = []*Template{good, good}
-	err = task.Validate(ephemeralDisk, JobTypeService, nil)
+	err = task.Validate(ephemeralDisk, JobTypeService, nil, nil)
 	if !strings.Contains(err.Error(), "same destination as") {
 		t.Fatalf("err: %s", err)
 	}
@@ -2088,7 +2085,7 @@ func TestTask_Validate_Template(t *testing.T) {
 		},
 	}
 
-	err = task.Validate(ephemeralDisk, JobTypeService, nil)
+	err = task.Validate(ephemeralDisk, JobTypeService, nil, nil)
 	if err == nil {
 		t.Fatalf("expected error from Template.Validate")
 	}
